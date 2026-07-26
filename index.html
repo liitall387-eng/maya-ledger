@@ -282,7 +282,7 @@
 </div>
 
 <div id="addPage" class="page">
-  <div class="header"><span style="font-size:36px">✏️</span><h1>记一笔</h1></div>
+  <div class="header"><span style="font-size:36px">✏️</span><h1 id="addTitle">记一笔</h1></div>
   <div class="add-page">
     <div class="form-group">
       <div class="kind-toggle">
@@ -309,7 +309,7 @@
     </div>
     <div class="form-btns">
       <button class="cancel-btn" onclick="showHome()">不记了</button>
-      <button class="confirm-btn" onclick="addRecord()">记好了 ✓</button>
+      <button class="confirm-btn" id="confirmBtn" onclick="addRecord()">记好了 ✓</button>
     </div>
   </div>
 </div>
@@ -449,6 +449,7 @@ const CAT_MOODS={
 let records=[],categories=[],quickAmts=[],notes=[];
 let currentMonth=getCurMK(),selectedCat="",patCount=0,currentNoteIdx=0,searchQuery="";
 let addKind="expense";
+let editingId=null;
 
 /* ============ 读写 ============ */
 /* 记录和纸条存在 VPS 上；分类、快捷金额是本机偏好，留在浏览器里 */
@@ -595,7 +596,7 @@ function renderRecords(mr){
       const idx=noteText.toLowerCase().indexOf(q);
       if(idx>=0){noteText=noteText.slice(0,idx)+'<mark style="background:#e8dff5;border-radius:2px;padding:0 2px;">'+noteText.slice(idx,idx+searchQuery.length)+'</mark>'+noteText.slice(idx+searchQuery.length);}
     }
-    html+=`<div class="record-item" id="rec-${r.id}"><div class="record-left"><span class="record-icon" style="background:${ci.color}22">${ci.emoji}</span><div><div class="record-note">${noteText}</div><div class="record-date">${fmtD(r.date)}${isInc?' · '+r.category:''}</div></div></div><div class="record-right"><span class="record-amt${isInc?' income':''}">${isInc?'+':'-'}¥${r.amount.toFixed(0)}</span><button class="del-btn" onclick="deleteRecord(${r.id})">×</button></div></div>`;
+    html+=`<div class="record-item" id="rec-${r.id}"><div class="record-left" onclick="showEdit(${r.id})" style="cursor:pointer;"><span class="record-icon" style="background:${ci.color}22">${ci.emoji}</span><div><div class="record-note">${noteText}</div><div class="record-date">${fmtD(r.date)}${isInc?' · '+r.category:''}</div></div></div><div class="record-right"><span class="record-amt${isInc?' income':''}">${isInc?'+':'-'}¥${r.amount.toFixed(0)}</span><button class="del-btn" onclick="deleteRecord(${r.id})">×</button></div></div>`;
   });
   document.getElementById("recordList").innerHTML=html;
 }
@@ -662,6 +663,9 @@ function nextMonth(){let[y,m]=currentMonth.split("-").map(Number);m++;if(m>12){m
 
 /* ============ 记一笔 ============ */
 function showAdd(){
+  editingId=null;
+  document.getElementById("addTitle").textContent="记一笔";
+  document.getElementById("confirmBtn").textContent="记好了 ✓";
   document.getElementById("homePage").classList.remove("active");
   document.getElementById("addPage").classList.add("active");
   document.getElementById("addAmount").value="";
@@ -671,6 +675,23 @@ function showAdd(){
   renderQuickAmtBtns();
   setTimeout(()=>document.getElementById("addAmount").focus(),300);
 }
+function showEdit(id){
+  const r=records.find(x=>x.id===id);
+  if(!r)return;
+  editingId=id;
+  document.getElementById("homePage").classList.remove("active");
+  document.getElementById("addPage").classList.add("active");
+  document.getElementById("addTitle").textContent="改一笔";
+  document.getElementById("confirmBtn").textContent="改好了 ✓";
+  renderQuickAmtBtns();
+  setKind(r.kind||"expense");
+  selectedCat=r.category;
+  renderCatPicker();
+  document.getElementById("addAmount").value=r.amount;
+  document.getElementById("addNote").value=r.note||"";
+  document.getElementById("addDate").value=r.date;
+}
+
 function showHome(){
   document.getElementById("addPage").classList.remove("active");
   document.getElementById("homePage").classList.add("active");
@@ -705,15 +726,24 @@ function renderQuickAmtBtns(){
 async function addRecord(){
   const amt=parseFloat(document.getElementById("addAmount").value);
   if(!amt||amt<=0){showToast("金额填一下嘛～");return;}
+  const body={
+    amount:amt, category:selectedCat, kind:addKind,
+    note:document.getElementById("addNote").value,
+    date:document.getElementById("addDate").value||getToday()
+  };
   try{
-    const saved=await api("/records",{method:"POST",body:{
-      amount:amt, category:selectedCat, kind:addKind,
-      note:document.getElementById("addNote").value,
-      date:document.getElementById("addDate").value||getToday()
-    }});
-    records.unshift({id:saved.id,amount:saved.amount,category:saved.category,
-                     note:saved.note,date:saved.date,kind:saved.kind});
-    showToast(addKind==="income"?"进账啦！💰":"记好啦！💕");
+    if(editingId){
+      const saved=await api(`/records/${editingId}`,{method:"PUT",body});
+      const i=records.findIndex(x=>x.id===editingId);
+      if(i>=0)records[i]={id:saved.id,amount:saved.amount,category:saved.category,
+                          note:saved.note,date:saved.date,kind:saved.kind};
+      showToast("改好啦！✨");
+    }else{
+      const saved=await api("/records",{method:"POST",body});
+      records.unshift({id:saved.id,amount:saved.amount,category:saved.category,
+                       note:saved.note,date:saved.date,kind:saved.kind});
+      showToast(addKind==="income"?"进账啦！💰":"记好啦！💕");
+    }
     showHome();
   }catch(e){showToast("没存上，检查下网络 😢");}
 }
@@ -765,19 +795,38 @@ async function importData(){
 function showCatManager(){renderCatManagerList();document.getElementById("catModal").classList.add("show");}
 function renderCatManagerList(){
   let html="";
-  categories.forEach((c,i)=>{html+=`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f0ede8;"><span style="font-size:20px">${c.emoji}</span><span style="flex:1;font-size:14px;">${c.key}</span><span style="width:16px;height:16px;border-radius:4px;background:${c.color};"></span><button onclick="removeCat(${i})" style="border:none;background:none;color:#ddd;font-size:18px;cursor:pointer;">×</button></div>`;});
+  const btn="border:none;background:none;color:#c9bfb5;font-size:16px;cursor:pointer;padding:2px 4px;";
+  categories.forEach((c,i)=>{
+    html+=`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0ede8;">`
+       +`<span style="font-size:20px">${c.emoji}</span>`
+       +`<span style="flex:1;font-size:14px;">${c.key}</span>`
+       +`<span style="width:16px;height:16px;border-radius:4px;background:${c.color};"></span>`
+       +`<button onclick="moveCat(${i},-1)" style="${btn}${i===0?'opacity:.25;':''}">↑</button>`
+       +`<button onclick="moveCat(${i},1)" style="${btn}${i===categories.length-1?'opacity:.25;':''}">↓</button>`
+       +`<button onclick="removeCat(${i})" style="border:none;background:none;color:#ddd;font-size:18px;cursor:pointer;">×</button>`
+       +`</div>`;
+  });
   document.getElementById("catManagerList").innerHTML=html;
 }
 function addCategory(){
   const emoji=document.getElementById("newCatEmoji").value.trim();const name=document.getElementById("newCatName").value.trim();
   if(!emoji||!name){showToast("emoji和名字都要填哦～");return;}
   if(categories.some(c=>c.key===name)){showToast("已经有了");return;}
-  const colors=["#E0829D","#82B5CF","#A8C97F","#D4A76A","#B08EBF","#6FB5A0","#CF8E8E","#8EA3CF"];
-  categories.push({key:name,emoji,color:colors[categories.length%colors.length]});
+  const palette=["#E0829D","#82B5CF","#A8C97F","#D4A76A","#B08EBF","#6FB5A0",
+                 "#CF8E8E","#8EA3CF","#E8A87C","#7BB5A3","#C9A9C4","#F2C57C"];
+  const used=categories.map(c=>c.color);
+  const color=palette.find(c=>!used.includes(c))||palette[categories.length%palette.length];
+  categories.push({key:name,emoji,color});
   saveCats();document.getElementById("newCatEmoji").value="";document.getElementById("newCatName").value="";
   renderCatManagerList();showToast(`添加了「${emoji} ${name}」！`);
 }
 function removeCat(i){categories.splice(i,1);saveCats();renderCatManagerList();showToast("删掉了～");}
+function moveCat(i,d){
+  const j=i+d;
+  if(j<0||j>=categories.length)return;
+  [categories[i],categories[j]]=[categories[j],categories[i]];
+  saveCats();renderCatManagerList();
+}
 
 function showQuickAmtManager(){renderQuickAmtList();document.getElementById("quickAmtModal").classList.add("show");}
 function renderQuickAmtList(){

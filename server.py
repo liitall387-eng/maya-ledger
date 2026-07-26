@@ -158,6 +158,35 @@ def do_query_records(start=None, end=None, category=None, keyword=None,
             "total_income": income, "by_category": by_cat, "records": rows}
 
 
+def do_update_record(record_id, **fields):
+    allowed = ("date", "kind", "amount", "category", "note")
+    sets, args = [], []
+    for k in allowed:
+        v = fields.get(k)
+        if v is None or v == "":
+            continue
+        if k == "amount":
+            v = round(float(v), 2)
+            if v <= 0:
+                raise ValueError("金额必须大于 0")
+        if k == "kind" and v not in ("expense", "income"):
+            raise ValueError("kind 只能是 expense 或 income")
+        sets.append(f"{k} = ?")
+        args.append(v)
+    if not sets:
+        raise ValueError("没有要改的内容")
+    args.append(record_id)
+    with _lock:
+        cur = db().execute(
+            f"UPDATE records SET {', '.join(sets)} WHERE id = ?", args)
+        db().commit()
+        if cur.rowcount == 0:
+            return None
+        row = db().execute("SELECT * FROM records WHERE id = ?",
+                           (record_id,)).fetchone()
+    return dict(row)
+
+
 def do_delete_record(record_id):
     with _lock:
         row = db().execute("SELECT * FROM records WHERE id = ?",
@@ -291,6 +320,23 @@ def query_records(start: str = "", end: str = "", category: str = "",
 
 
 @mcp.tool()
+def update_record(record_id: int, amount: float = 0, category: str = "",
+                  note: str = "", date: str = "", kind: str = "") -> str:
+    """改一条已有记录。只填要改的字段，没填的保持原样。
+
+    改之前最好先用 query_records 确认 id。
+    """
+    row = do_update_record(record_id, amount=amount or None,
+                           category=category or None, note=note or None,
+                           date=date or None, kind=kind or None)
+    if row is None:
+        return f"没有 id 为 {record_id} 的记录。"
+    word = "支出" if row["kind"] == "expense" else "收入"
+    return (f"已改为 #{row['id']}：{row['date']} {word} {row['amount']} 元"
+            f"（{row['category']}）{row['note']}")
+
+
+@mcp.tool()
 def delete_record(record_id: int) -> str:
     """按 id 删掉一条记录。删之前最好先用 query_records 确认 id。"""
     row = do_delete_record(record_id)
@@ -357,6 +403,20 @@ async def api_add_record(request):
         return ok(do_add_record(
             b.get("amount"), b.get("category", "其他"), b.get("note", ""),
             b.get("date"), b.get("kind", "expense")))
+    except Exception as e:
+        return ok({"error": str(e)}, 400)
+
+
+@mcp.custom_route(f"{P}/records/{{rid:int}}", methods=["PUT"])
+async def api_update_record(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
+    try:
+        row = do_update_record(request.path_params["rid"], **(await request.json()))
+        if row is None:
+            return ok({"error": "not found"}, 404)
+        return ok(row)
     except Exception as e:
         return ok({"error": str(e)}, 400)
 
