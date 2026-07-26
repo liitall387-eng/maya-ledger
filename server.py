@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
@@ -188,7 +189,14 @@ def do_delete_note(note_id):
 
 # ---------------------------------------------------------------- MCP 工具
 
-mcp = FastMCP("maya-ledger", streamable_http_path=f"/{TOKEN}/mcp")
+mcp = FastMCP(
+    "maya-ledger",
+    streamable_http_path=f"/{TOKEN}/mcp",
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=["ledger-mcp.ob1009.top"],
+        allowed_origins=["https://claude.ai", "https://ledger.ob1009.top"],
+    ),
+)
 
 
 @mcp.tool()
