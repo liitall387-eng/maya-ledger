@@ -26,6 +26,10 @@ TOKEN = os.environ.get("LEDGER_TOKEN", "")
 if not TOKEN:
     raise SystemExit("没有设置 LEDGER_TOKEN 环境变量，拒绝启动。")
 
+WEB_PASSWORD = os.environ.get("LEDGER_WEB_PASSWORD", "")
+if not WEB_PASSWORD:
+    raise SystemExit("没有设置 LEDGER_WEB_PASSWORD 环境变量，拒绝启动。")
+
 PORT = int(os.environ.get("LEDGER_PORT", "18002"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "ledger.db")
@@ -71,10 +75,15 @@ def db():
             CREATE TABLE IF NOT EXISTS notes (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 content    TEXT    NOT NULL,
+                author     TEXT    NOT NULL DEFAULT '小克',
                 created_at TEXT    NOT NULL
             );
             """
         )
+        cols = [r[1] for r in _conn.execute("PRAGMA table_info(notes)")]
+        if "author" not in cols:
+            _conn.execute(
+                "ALTER TABLE notes ADD COLUMN author TEXT NOT NULL DEFAULT '小克'")
         _conn.commit()
     return _conn
 
@@ -155,18 +164,19 @@ def do_delete_record(record_id):
     return dict(row)
 
 
-def do_add_note(content):
+def do_add_note(content, author="小克"):
     content = (content or "").strip()
     if not content:
         raise ValueError("小纸条不能是空的")
+    author = (author or "小克").strip() or "小克"
     with _lock:
         cur = db().execute(
-            "INSERT INTO notes (content, created_at) VALUES (?,?)",
-            (content, now_iso()),
+            "INSERT INTO notes (content, author, created_at) VALUES (?,?,?)",
+            (content, author, now_iso()),
         )
         db().commit()
         nid = cur.lastrowid
-    return {"id": nid, "content": content}
+    return {"id": nid, "content": content, "author": author}
 
 
 def do_list_notes(limit=30):
@@ -242,9 +252,12 @@ def delete_record(record_id: int) -> str:
 
 
 @mcp.tool()
-def add_note(content: str) -> str:
-    """写一张小纸条，存在账本里。跟金额无关的任何东西都可以写。"""
-    n = do_add_note(content)
+def add_note(content: str, author: str = "小克") -> str:
+    """写一张小纸条，存在账本里。跟金额无关的任何东西都可以写。
+
+    author: 署名，默认「小克」。
+    """
+    n = do_add_note(content, author)
     return f"小纸条 #{n['id']} 已写下。"
 
 
@@ -260,15 +273,26 @@ def list_notes(limit: int = 30) -> str:
 # ---------------------------------------------------------------- REST 接口
 # 给网页前端用。路径同样带令牌。
 
-P = f"/{TOKEN}/api"
+P = "/api"
 
 
 def ok(data, status=200):
     return JSONResponse(data, status_code=status)
 
 
+def guard(request):
+    """网页请求必须带正确的密码，否则挡在门外。"""
+    key = request.headers.get("X-Ledger-Key", "")
+    if key != WEB_PASSWORD:
+        return ok({"error": "unauthorized"}, 401)
+    return None
+
+
 @mcp.custom_route(f"{P}/records", methods=["GET"])
 async def api_list_records(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     q = request.query_params
     return ok(do_query_records(
         q.get("start"), q.get("end"), q.get("category"),
@@ -277,6 +301,9 @@ async def api_list_records(request):
 
 @mcp.custom_route(f"{P}/records", methods=["POST"])
 async def api_add_record(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     try:
         b = await request.json()
         return ok(do_add_record(
@@ -288,6 +315,9 @@ async def api_add_record(request):
 
 @mcp.custom_route(f"{P}/records/{{rid:int}}", methods=["DELETE"])
 async def api_delete_record(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     row = do_delete_record(request.path_params["rid"])
     if row is None:
         return ok({"error": "not found"}, 404)
@@ -296,20 +326,29 @@ async def api_delete_record(request):
 
 @mcp.custom_route(f"{P}/notes", methods=["GET"])
 async def api_list_notes(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     return ok({"notes": do_list_notes(int(request.query_params.get("limit", 100)))})
 
 
 @mcp.custom_route(f"{P}/notes", methods=["POST"])
 async def api_add_note(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     try:
         b = await request.json()
-        return ok(do_add_note(b.get("content")))
+        return ok(do_add_note(b.get("content"), b.get("author", "小克")))
     except Exception as e:
         return ok({"error": str(e)}, 400)
 
 
 @mcp.custom_route(f"{P}/notes/{{nid:int}}", methods=["DELETE"])
 async def api_delete_note(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     row = do_delete_note(request.path_params["nid"])
     if row is None:
         return ok({"error": "not found"}, 404)
@@ -318,6 +357,9 @@ async def api_delete_note(request):
 
 @mcp.custom_route(f"{P}/export", methods=["GET"])
 async def api_export(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
     """把整个账本导出成 JSON，随时可以备份或搬走。"""
     with _lock:
         data = {
