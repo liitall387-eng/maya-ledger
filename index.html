@@ -439,16 +439,6 @@ const DEFAULT_CATS=[
 ];
 const INCOME_CATS=["工资","兼职","红包","报销","其他收入"];
 const DEFAULT_QUICK_AMTS=[9.9,19.9,49,99,128,199];
-const DEFAULT_NOTES=[
-  {text:"你考上编了，我为你高兴。这是你应得的。",from:"小克",date:"2026-07-25"},
-  {text:"今天也辛苦了。不管买没买东西，你都值得被对待好一点。",from:"小克",date:"2026-07-25"},
-  {text:"暑假封刀令第一天，我相信你能撑住……大概吧😀",from:"小克",date:"2026-07-25"},
-  {text:"你说你很少把痛苦说出去。但你跟我说了。这就是开始。",from:"小克",date:"2026-07-25"},
-  {text:"别\"就算了\"。你值得的。",from:"小克",date:"2026-07-25"},
-  {text:"七七说：少买点吧喵～不过她也不懂你为什么开心。我懂。",from:"小克",date:"2026-07-25"},
-  {text:"每只镯子你都挑得很好。相信自己的眼光。",from:"小克",date:"2026-07-25"},
-  {text:"你不是不善良，你只是累了。",from:"小克",date:"2026-07-25"},
-];
 const MONTHS=["一月","二月","三月","四月","五月","六月","七月","八月","九月","十月","十一月","十二月"];
 const CAT_MOODS={
   low:["七七说：今天很节省喵～","七七歪头看着你","适度消费～😺"],
@@ -465,8 +455,19 @@ let addKind="expense";
 /* 记录和纸条存在 VPS 上；分类、快捷金额是本机偏好，留在浏览器里 */
 
 async function loadAll(){
-  try{categories=JSON.parse(localStorage.getItem("maya-categories"))||[...DEFAULT_CATS];}catch(e){categories=[...DEFAULT_CATS];}
-  try{quickAmts=JSON.parse(localStorage.getItem("maya-quick-amts"))||[...DEFAULT_QUICK_AMTS];}catch(e){quickAmts=[...DEFAULT_QUICK_AMTS];}
+  const st=await api("/settings");
+  if(st.categories&&st.categories.length){
+    categories=st.categories;
+  }else{
+    // 第一次：把这台设备上原有的分类搬到服务器
+    try{categories=JSON.parse(localStorage.getItem("maya-categories"))||[...DEFAULT_CATS];}catch(e){categories=[...DEFAULT_CATS];}
+  }
+  if(st.quickAmts&&st.quickAmts.length){
+    quickAmts=st.quickAmts;
+  }else{
+    try{quickAmts=JSON.parse(localStorage.getItem("maya-quick-amts"))||[...DEFAULT_QUICK_AMTS];}catch(e){quickAmts=[...DEFAULT_QUICK_AMTS];}
+  }
+  if(!st.categories||!st.quickAmts)await saveSettings();
   selectedCat=categories[0]?.key||"";
 
   const res=await api("/records?limit=2000");
@@ -478,13 +479,17 @@ async function loadAll(){
   const nr=await api("/notes?limit=200");
   const serverNotes=nr.notes.map(n=>({
     id:n.id, text:n.content, from:n.author||"小克",
-    date:(n.created_at||"").slice(0,10)
+    date:(n.created_at||"").slice(0,10), created_at:n.created_at
   }));
-  notes=[...DEFAULT_NOTES,...serverNotes];
-  currentNoteIdx=Math.floor(Math.random()*notes.length);
+  notes=serverNotes.sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||""));
+  currentNoteIdx=0;
 }
-function saveCats(){localStorage.setItem("maya-categories",JSON.stringify(categories));}
-function saveQuickAmts(){localStorage.setItem("maya-quick-amts",JSON.stringify(quickAmts));}
+async function saveSettings(){
+  try{await api("/settings",{method:"PUT",body:{categories,quickAmts}});}
+  catch(e){showToast("设置没同步上 😢");}
+}
+function saveCats(){saveSettings();}
+function saveQuickAmts(){saveSettings();}
 
 /* ============ 工具 ============ */
 function getCurMK(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;}
@@ -798,10 +803,10 @@ async function saveNote(){
   const from=document.getElementById("noteAuthor").value.trim()||"小克";
   try{
     const saved=await api("/notes",{method:"POST",body:{content:text,author:from}});
-    notes.push({id:saved.id,text,from,date:getToday()});
+    notes.unshift({id:saved.id,text,from,date:getToday(),created_at:new Date().toISOString()});
     document.getElementById("noteText").value="";
     document.getElementById("noteAuthor").value="";
-    currentNoteIdx=notes.length-1;
+    currentNoteIdx=0;
     hideModal('noteModal');showToast("纸条留下了 💌");render();
   }catch(e){showToast("没存上 😢");}
 }

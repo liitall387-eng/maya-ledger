@@ -72,6 +72,11 @@ def db():
             );
             CREATE INDEX IF NOT EXISTS idx_records_date ON records(date);
 
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS notes (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 content    TEXT    NOT NULL,
@@ -177,6 +182,29 @@ def do_add_note(content, author="小克"):
         db().commit()
         nid = cur.lastrowid
     return {"id": nid, "content": content, "author": author}
+
+
+def do_get_settings():
+    with _lock:
+        rows = db().execute("SELECT key, value FROM settings").fetchall()
+    out = {}
+    for r in rows:
+        try:
+            out[r["key"]] = json.loads(r["value"])
+        except Exception:
+            pass
+    return out
+
+
+def do_set_settings(data):
+    with _lock:
+        for k, v in (data or {}).items():
+            db().execute(
+                "INSERT INTO settings (key, value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (k, json.dumps(v, ensure_ascii=False)))
+        db().commit()
+    return do_get_settings()
 
 
 def has_note_today():
@@ -373,6 +401,25 @@ async def api_delete_note(request):
     if row is None:
         return ok({"error": "not found"}, 404)
     return ok({"deleted": row})
+
+
+@mcp.custom_route(f"{P}/settings", methods=["GET"])
+async def api_get_settings(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
+    return ok(do_get_settings())
+
+
+@mcp.custom_route(f"{P}/settings", methods=["PUT"])
+async def api_set_settings(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
+    try:
+        return ok(do_set_settings(await request.json()))
+    except Exception as e:
+        return ok({"error": str(e)}, 400)
 
 
 @mcp.custom_route(f"{P}/export", methods=["GET"])
