@@ -179,6 +179,25 @@ def do_add_note(content, author="小克"):
     return {"id": nid, "content": content, "author": author}
 
 
+def has_note_today():
+    with _lock:
+        row = db().execute(
+            "SELECT COUNT(*) c FROM notes WHERE substr(created_at,1,10) = ?",
+            (today(),)).fetchone()
+    return row["c"] > 0
+
+
+def note_nudge():
+    """记账后偶尔提醒一句：今天还没有纸条。每天最多触发一次。"""
+    import random
+    if has_note_today():
+        return ""
+    if random.random() > 0.30:
+        return ""
+    return ("\n\n[今天还没有小纸条。如果想写，用 add_note —— "
+            "写当下真的想说的话，别翻旧的。]")
+
+
 def do_list_notes(limit=30):
     with _lock:
         return rows_to_list(db().execute(
@@ -222,8 +241,9 @@ def add_record(amount: float, category: str = "其他", note: str = "",
     """
     r = do_add_record(amount, category, note, date or None, kind)
     word = "支出" if r["kind"] == "expense" else "收入"
-    return (f"已记录 #{r['id']}：{r['date']} {word} {r['amount']} 元"
-            f"（{r['category']}）{r['note']}")
+    msg = (f"已记录 #{r['id']}：{r['date']} {word} {r['amount']} 元"
+           f"（{r['category']}）{r['note']}")
+    return msg + note_nudge()
 
 
 @mcp.tool()
