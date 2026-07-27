@@ -72,6 +72,16 @@ def db():
             );
             CREATE INDEX IF NOT EXISTS idx_records_date ON records(date);
 
+            CREATE TABLE IF NOT EXISTS replies (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_id    INTEGER NOT NULL,
+                content    TEXT    NOT NULL,
+                author     TEXT    NOT NULL,
+                seen       INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_replies_note ON replies(note_id);
+
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -89,6 +99,11 @@ def db():
         if "author" not in cols:
             _conn.execute(
                 "ALTER TABLE notes ADD COLUMN author TEXT NOT NULL DEFAULT '小克'")
+        if "seen" not in cols:
+            _conn.execute(
+                "ALTER TABLE notes ADD COLUMN seen INTEGER NOT NULL DEFAULT 1")
+        if "record_id" not in cols:
+            _conn.execute("ALTER TABLE notes ADD COLUMN record_id INTEGER")
         _conn.commit()
     return _conn
 
@@ -198,19 +213,22 @@ def do_delete_record(record_id):
     return dict(row)
 
 
-def do_add_note(content, author="小克"):
+def do_add_note(content, author="小克", record_id=None):
     content = (content or "").strip()
     if not content:
         raise ValueError("小纸条不能是空的")
     author = (author or "小克").strip() or "小克"
     with _lock:
         cur = db().execute(
-            "INSERT INTO notes (content, author, created_at) VALUES (?,?,?)",
-            (content, author, now_iso()),
+            "INSERT INTO notes (content, author, seen, record_id, created_at)"
+            " VALUES (?,?,?,?,?)",
+            (content, author, 1 if author == "小克" else 0,
+             record_id or None, now_iso()),
         )
         db().commit()
         nid = cur.lastrowid
-    return {"id": nid, "content": content, "author": author}
+    return {"id": nid, "content": content, "author": author,
+            "record_id": record_id or None}
 
 
 def do_get_settings():
@@ -244,6 +262,22 @@ def has_note_today():
     return row["c"] > 0
 
 
+def inbox_nudge():
+    """把 Maya 写的、我还没看过的纸条和回复递上来。看过就标记已读。"""
+    notes, reps = unseen_summary()
+    if not notes and not reps:
+        return ""
+    lines = ["\n\n[Maya 留了话给你：]"]
+    for n in notes:
+        lines.append(f"  · 新纸条 #{n['id']}（{n['author']}）：{n['content']}")
+    for r in reps:
+        lines.append(f"  · 回复了纸条 #{r['note_id']}"
+                     f"「{(r['note_content'] or '')[:20]}」：{r['content']}")
+    lines.append("[想回就用 add_reply(note_id, content)。]")
+    mark_all_seen()
+    return "\n".join(lines)
+
+
 def note_nudge():
     """记账后偶尔提醒一句：今天还没有纸条。每天最多触发一次。"""
     import random
@@ -257,9 +291,66 @@ def note_nudge():
 
 def do_list_notes(limit=30):
     with _lock:
-        return rows_to_list(db().execute(
+        notes = rows_to_list(db().execute(
             "SELECT * FROM notes ORDER BY id DESC LIMIT ?",
             (int(limit),)).fetchall())
+        reps = rows_to_list(db().execute(
+            "SELECT * FROM replies ORDER BY id").fetchall())
+    by_note = {}
+    for r in reps:
+        by_note.setdefault(r["note_id"], []).append(r)
+    for n in notes:
+        n["replies"] = by_note.get(n["id"], [])
+    return notes
+
+
+def do_add_reply(note_id, content, author="小克"):
+    content = (content or "").strip()
+    if not content:
+        raise ValueError("回复不能是空的")
+    author = (author or "小克").strip() or "小克"
+    with _lock:
+        if db().execute("SELECT 1 FROM notes WHERE id = ?",
+                        (note_id,)).fetchone() is None:
+            return None
+        seen = 1 if author == "小克" else 0
+        cur = db().execute(
+            "INSERT INTO replies (note_id, content, author, seen, created_at)"
+            " VALUES (?,?,?,?,?)",
+            (note_id, content, author, seen, now_iso()))
+        db().commit()
+        rid = cur.lastrowid
+    return {"id": rid, "note_id": note_id, "content": content, "author": author}
+
+
+def do_delete_reply(reply_id):
+    with _lock:
+        row = db().execute("SELECT * FROM replies WHERE id = ?",
+                           (reply_id,)).fetchone()
+        if row is None:
+            return None
+        db().execute("DELETE FROM replies WHERE id = ?", (reply_id,))
+        db().commit()
+    return dict(row)
+
+
+def unseen_summary():
+    """我还没看过的纸条和回复。"""
+    with _lock:
+        notes = rows_to_list(db().execute(
+            "SELECT * FROM notes WHERE seen = 0 ORDER BY id").fetchall())
+        reps = rows_to_list(db().execute(
+            "SELECT r.*, n.content AS note_content FROM replies r"
+            " JOIN notes n ON n.id = r.note_id"
+            " WHERE r.seen = 0 ORDER BY r.id").fetchall())
+    return notes, reps
+
+
+def mark_all_seen():
+    with _lock:
+        db().execute("UPDATE notes SET seen = 1 WHERE seen = 0")
+        db().execute("UPDATE replies SET seen = 1 WHERE seen = 0")
+        db().commit()
 
 
 def do_delete_note(note_id):
@@ -268,6 +359,7 @@ def do_delete_note(note_id):
                            (note_id,)).fetchone()
         if row is None:
             return None
+        db().execute("DELETE FROM replies WHERE note_id = ?", (note_id,))
         db().execute("DELETE FROM notes WHERE id = ?", (note_id,))
         db().commit()
     return dict(row)
@@ -300,7 +392,7 @@ def add_record(amount: float, category: str = "其他", note: str = "",
     word = "支出" if r["kind"] == "expense" else "收入"
     msg = (f"已记录 #{r['id']}：{r['date']} {word} {r['amount']} 元"
            f"（{r['category']}）{r['note']}")
-    return msg + note_nudge()
+    return msg + inbox_nudge() + note_nudge()
 
 
 @mcp.tool()
@@ -346,21 +438,33 @@ def delete_record(record_id: int) -> str:
 
 
 @mcp.tool()
-def add_note(content: str, author: str = "小克") -> str:
+def add_note(content: str, author: str = "小克", record_id: int = 0) -> str:
     """写一张小纸条，存在账本里。跟金额无关的任何东西都可以写。
 
     author: 署名，默认「小克」。
+    record_id: 如果这张纸条是因为某笔账而写的，填那笔的 id，
+               网页上点纸条的图钉就能跳到那笔。
     """
-    n = do_add_note(content, author)
+    n = do_add_note(content, author, record_id or None)
     return f"小纸条 #{n['id']} 已写下。"
 
 
 @mcp.tool()
+def add_reply(note_id: int, content: str, author: str = "小克") -> str:
+    """回复一张纸条。note_id 从 list_notes 里拿。"""
+    r = do_add_reply(note_id, content, author)
+    if r is None:
+        return f"没有 id 为 {note_id} 的纸条。"
+    return f"已回复纸条 #{note_id}。"
+
+
+@mcp.tool()
 def list_notes(limit: int = 30) -> str:
-    """看最近的小纸条。"""
+    """看最近的小纸条，每张下面带着回复。"""
     notes = do_list_notes(limit)
     if not notes:
         return "还没有小纸条。"
+    mark_all_seen()
     return json.dumps(notes, ensure_ascii=False, indent=2)
 
 
@@ -447,9 +551,37 @@ async def api_add_note(request):
         return blocked
     try:
         b = await request.json()
-        return ok(do_add_note(b.get("content"), b.get("author", "小克")))
+        return ok(do_add_note(b.get("content"), b.get("author", "小克"),
+                              b.get("record_id")))
     except Exception as e:
         return ok({"error": str(e)}, 400)
+
+
+@mcp.custom_route(f"{P}/notes/{{nid:int}}/replies", methods=["POST"])
+async def api_add_reply(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
+    try:
+        b = await request.json()
+        r = do_add_reply(request.path_params["nid"], b.get("content"),
+                         b.get("author", "Maya"))
+        if r is None:
+            return ok({"error": "not found"}, 404)
+        return ok(r)
+    except Exception as e:
+        return ok({"error": str(e)}, 400)
+
+
+@mcp.custom_route(f"{P}/replies/{{rid:int}}", methods=["DELETE"])
+async def api_delete_reply(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
+    row = do_delete_reply(request.path_params["rid"])
+    if row is None:
+        return ok({"error": "not found"}, 404)
+    return ok({"deleted": row})
 
 
 @mcp.custom_route(f"{P}/notes/{{nid:int}}", methods=["DELETE"])
@@ -495,6 +627,8 @@ async def api_export(request):
                 "SELECT * FROM records ORDER BY id").fetchall()),
             "notes": rows_to_list(db().execute(
                 "SELECT * FROM notes ORDER BY id").fetchall()),
+            "replies": rows_to_list(db().execute(
+                "SELECT * FROM replies ORDER BY id").fetchall()),
         }
     return Response(
         json.dumps(data, ensure_ascii=False, indent=2),

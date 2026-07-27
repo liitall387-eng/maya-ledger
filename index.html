@@ -2,7 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#EDE7F5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Maya的小账本">
+<link rel="apple-touch-icon" href="icon.png">
 <title>Maya的小账本</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -208,6 +213,9 @@
   .note-nav { display:flex; justify-content:space-between; align-items:center; margin-top:10px; }
   .note-nav-btn { background:none; border:none; color:var(--purple); font-size:14px; cursor:pointer; padding:4px 8px; }
   .note-counter { font-size:11px; color:#ccc; }
+  .record-note { display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical;
+                 overflow:hidden; }
+  .record-note.expanded { -webkit-line-clamp:unset; overflow:visible; }
 </style>
 </head>
 <body>
@@ -231,8 +239,8 @@
     <p class="cat-mood" id="catMood"></p>
   </div>
   <div class="note-card" id="noteCard">
-    <span class="note-pin">📌</span>
-    <div class="note-label">💌 小克的纸条</div>
+    <span class="note-pin" id="notePin"></span>
+    <div class="note-label" id="noteLabel2" onclick="openThread()" style="cursor:pointer;"></div>
     <div class="note-content" id="noteContent"></div>
     <div class="note-from" id="noteFrom"></div>
     <div class="note-nav">
@@ -353,10 +361,23 @@
   </div>
 </div>
 
+<div id="threadModal" class="modal-overlay">
+  <div class="modal-box">
+    <h3 class="modal-title" id="threadTitle">💌</h3>
+    <div id="threadBody" style="max-height:46vh;overflow-y:auto;margin:8px 0 12px;"></div>
+    <textarea id="replyText" class="modal-textarea" placeholder="回一句～"
+      style="height:70px;font-family:inherit;font-size:14px;"></textarea>
+    <div class="modal-btns">
+      <button class="cancel-btn" onclick="hideModal('threadModal')">关闭</button>
+      <button class="confirm-btn" onclick="sendReply()">回复</button>
+    </div>
+  </div>
+</div>
+
 <div id="noteModal" class="modal-overlay">
   <div class="modal-box">
     <h3 class="modal-title">写小纸条 ✉️</h3>
-    <p class="modal-desc">给Maya的悄悄话</p>
+    <p class="modal-desc">我们的悄悄话</p>
     <input type="text" id="noteAuthor" class="form-input" placeholder="署名（默认：小克）" style="margin-bottom:10px;font-size:14px;">
     <textarea id="noteText" class="modal-textarea" placeholder="写点什么～" style="height:100px;font-family:inherit;font-size:14px;font-style:italic;"></textarea>
     <div class="modal-btns">
@@ -450,6 +471,8 @@ let records=[],categories=[],quickAmts=[],notes=[];
 let currentMonth=getCurMK(),selectedCat="",patCount=0,currentNoteIdx=0,searchQuery="";
 let addKind="expense";
 let editingId=null;
+let page=0;
+const PAGE_SIZE=7;
 
 /* ============ 读写 ============ */
 /* 记录和纸条存在 VPS 上；分类、快捷金额是本机偏好，留在浏览器里 */
@@ -479,7 +502,8 @@ async function loadAll(){
   const nr=await api("/notes?limit=200");
   const serverNotes=nr.notes.map(n=>({
     id:n.id, text:n.content, from:n.author||"小克",
-    date:(n.created_at||"").slice(0,10), created_at:n.created_at
+    date:(n.created_at||"").slice(0,10), created_at:n.created_at,
+    replies:n.replies||[], record_id:n.record_id
   }));
   notes=serverNotes.sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||""));
   currentNoteIdx=0;
@@ -586,8 +610,13 @@ function renderRecords(mr){
     document.getElementById("recordList").innerHTML=`<div class="empty-state"><span class="empty-emoji">${searchQuery?"🔍":"✨"}</span><p class="empty-text">${searchQuery?"没找到相关记录～":"这个月还没记账呢～"}</p></div>`;
     return;
   }
+  const totalPages=Math.max(1,Math.ceil(filtered.length/PAGE_SIZE));
+  if(page>=totalPages)page=totalPages-1;
+  if(page<0)page=0;
+  const pageItems=filtered.slice(page*PAGE_SIZE,(page+1)*PAGE_SIZE);
+
   let html="";
-  filtered.forEach(r=>{
+  pageItems.forEach(r=>{
     const isInc=r.kind==="income";
     const ci=isInc?{emoji:"💰",color:"#7BB5A3"}:getCI(r.category);
     let noteText=r.note||r.category;
@@ -596,20 +625,54 @@ function renderRecords(mr){
       const idx=noteText.toLowerCase().indexOf(q);
       if(idx>=0){noteText=noteText.slice(0,idx)+'<mark style="background:#e8dff5;border-radius:2px;padding:0 2px;">'+noteText.slice(idx,idx+searchQuery.length)+'</mark>'+noteText.slice(idx+searchQuery.length);}
     }
-    html+=`<div class="record-item" id="rec-${r.id}"><div class="record-left" onclick="showEdit(${r.id})" style="cursor:pointer;"><span class="record-icon" style="background:${ci.color}22">${ci.emoji}</span><div><div class="record-note">${noteText}</div><div class="record-date">${fmtD(r.date)}${isInc?' · '+r.category:''}</div></div></div><div class="record-right"><span class="record-amt${isInc?' income':''}">${isInc?'+':'-'}¥${r.amount.toFixed(0)}</span><button class="del-btn" onclick="deleteRecord(${r.id})">×</button></div></div>`;
+    html+=`<div class="record-item" id="rec-${r.id}"><div class="record-left" onclick="showEdit(${r.id})" style="cursor:pointer;"><span class="record-icon" style="background:${ci.color}22">${ci.emoji}</span><div><div class="record-note" onclick="event.stopPropagation();this.classList.toggle('expanded')" style="cursor:pointer;">${noteText}</div><div class="record-date">${fmtD(r.date)}${isInc?' · '+r.category:''}</div></div></div><div class="record-right"><span class="record-amt${isInc?' income':''}">${isInc?'+':'-'}¥${r.amount.toFixed(0)}</span><button class="del-btn" onclick="deleteRecord(${r.id})">×</button></div></div>`;
   });
+  if(totalPages>1){
+    html+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 4px 4px;">`
+       +`<button onclick="goPage(${page-1})" style="border:none;background:none;font-family:inherit;font-size:14px;color:${page===0?'#ddd':'#8B7BA8'};cursor:pointer;padding:6px 10px;">‹ 上一页</button>`
+       +`<span style="font-size:13px;color:#a89f96;">${page+1} / ${totalPages}</span>`
+       +`<button onclick="goPage(${page+1})" style="border:none;background:none;font-family:inherit;font-size:14px;color:${page===totalPages-1?'#ddd':'#8B7BA8'};cursor:pointer;padding:6px 10px;">下一页 ›</button>`
+       +`</div>`;
+  }
   document.getElementById("recordList").innerHTML=html;
+}
+
+function jumpToRecord(id){
+  const r=records.find(x=>x.id===id);
+  if(!r){showToast("那笔记录已经没有了");return;}
+  const d=new Date(r.date);
+  currentMonth=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  searchQuery="";document.getElementById("searchInput").value="";
+  const mr=[...getMR(currentMonth)].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const idx=mr.findIndex(x=>x.id===id);
+  page=idx>=0?Math.floor(idx/PAGE_SIZE):0;
+  render();
+  setTimeout(()=>{
+    const el=document.getElementById(`rec-${id}`);
+    if(!el)return;
+    el.scrollIntoView({behavior:"smooth",block:"center"});
+    el.style.transition="background .3s";
+    el.style.background="#F3EEFA";
+    setTimeout(()=>{el.style.background="";},2200);
+  },120);
+}
+
+function goPage(p){
+  page=p;
+  renderRecords(getMR(currentMonth));
+  const el=document.getElementById("recordList");
+  if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
 }
 
 function onSearch(){
   const v=document.getElementById("searchInput").value.trim();
-  searchQuery=v;
+  searchQuery=v;page=0;
   document.getElementById("searchClear").style.display=v?"block":"none";
   renderRecords(getMR(currentMonth));
 }
 function clearSearch(){
   document.getElementById("searchInput").value="";
-  searchQuery="";
+  searchQuery="";page=0;
   document.getElementById("searchClear").style.display="none";
   document.getElementById("searchInfo").style.display="none";
   renderRecords(getMR(currentMonth));
@@ -651,6 +714,19 @@ function renderNote(){
   if(currentNoteIdx>=notes.length)currentNoteIdx=0;
   if(currentNoteIdx<0)currentNoteIdx=notes.length-1;
   const n=notes[currentNoteIdx];
+  const rc=(n.replies||[]).length;
+  document.getElementById("noteLabel2").textContent=
+    `💌 ${n.from}的纸条${rc?`（${rc}）`:""}`;
+  const pin=document.getElementById("notePin");
+  const rec=n.record_id?records.find(r=>r.id===n.record_id):null;
+  pin.textContent="📌";
+  if(rec){
+    pin.style.cursor="pointer";
+    pin.title=`${rec.note||rec.category} ¥${rec.amount}`;
+    pin.onclick=()=>jumpToRecord(rec.id);
+  }else{
+    pin.style.cursor="default";pin.onclick=null;pin.title="";
+  }
   document.getElementById("noteContent").textContent=n.text;
   document.getElementById("noteFrom").textContent=`—— ${n.from}`;
   document.getElementById("noteCounter").textContent=`${currentNoteIdx+1} / ${notes.length}`;
@@ -658,8 +734,8 @@ function renderNote(){
 function prevNote(){currentNoteIdx--;renderNote();}
 function nextNote(){currentNoteIdx++;renderNote();}
 
-function prevMonth(){let[y,m]=currentMonth.split("-").map(Number);m--;if(m<1){m=12;y--;}currentMonth=`${y}-${String(m).padStart(2,'0')}`;searchQuery="";document.getElementById("searchInput").value="";render();}
-function nextMonth(){let[y,m]=currentMonth.split("-").map(Number);m++;if(m>12){m=1;y++;}currentMonth=`${y}-${String(m).padStart(2,'0')}`;searchQuery="";document.getElementById("searchInput").value="";render();}
+function prevMonth(){let[y,m]=currentMonth.split("-").map(Number);m--;if(m<1){m=12;y--;}currentMonth=`${y}-${String(m).padStart(2,'0')}`;searchQuery="";document.getElementById("searchInput").value="";page=0;render();}
+function nextMonth(){let[y,m]=currentMonth.split("-").map(Number);m++;if(m>12){m=1;y++;}currentMonth=`${y}-${String(m).padStart(2,'0')}`;searchQuery="";document.getElementById("searchInput").value="";page=0;render();}
 
 /* ============ 记一笔 ============ */
 function showAdd(){
@@ -844,6 +920,58 @@ function addQuickAmt(){
 function removeQuickAmt(i){quickAmts.splice(i,1);saveQuickAmts();renderQuickAmtList();showToast("删掉了～");}
 
 /* ============ 纸条 ============ */
+function openThread(){
+  const n=notes[currentNoteIdx];
+  if(!n)return;
+  document.getElementById("threadTitle").textContent=`💌 ${n.from}的纸条`;
+  renderThread();
+  document.getElementById("replyText").value="";
+  document.getElementById("threadModal").classList.add("show");
+}
+
+function renderThread(){
+  const n=notes[currentNoteIdx];
+  let h=`<div style="background:#faf7f3;border-radius:12px;padding:12px;margin-bottom:10px;">`
+      +`<div style="font-size:14px;line-height:1.6;color:#5c5249;">${esc(n.text)}</div>`
+      +`<div style="font-size:12px;color:#b5aca3;text-align:right;margin-top:6px;">—— ${esc(n.from)} · ${n.date}</div>`
+      +`</div>`;
+  (n.replies||[]).forEach(r=>{
+    const mine=r.author!=="小克";
+    h+=`<div style="background:${mine?"#FDF0F4":"#EDF3FA"};border-radius:12px;padding:10px 12px;margin-bottom:8px;margin-left:${mine?"24px":"0"};">`
+      +`<div style="font-size:13px;line-height:1.6;color:#5c5249;">${esc(r.content)}</div>`
+      +`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">`
+      +`<span style="font-size:11px;color:#b5aca3;">${esc(r.author)} · ${(r.created_at||"").slice(5,10)}</span>`
+      +(mine?`<button onclick="delReply(${r.id})" style="border:none;background:none;color:#ddd;font-size:15px;cursor:pointer;">×</button>`:"")
+      +`</div></div>`;
+  });
+  if(!(n.replies||[]).length)h+=`<p style="font-size:12px;color:#c9bfb5;text-align:center;padding:4px 0;">还没有人回～</p>`;
+  document.getElementById("threadBody").innerHTML=h;
+}
+
+function esc(t){return (t||"").replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));}
+
+async function sendReply(){
+  const n=notes[currentNoteIdx];
+  const v=document.getElementById("replyText").value.trim();
+  if(!v){showToast("写点什么嘛～");return;}
+  try{
+    const saved=await api(`/notes/${n.id}/replies`,{method:"POST",body:{content:v,author:"Maya"}});
+    n.replies=n.replies||[];
+    n.replies.push({id:saved.id,content:v,author:"Maya",created_at:new Date().toISOString()});
+    document.getElementById("replyText").value="";
+    renderThread();renderNote();
+  }catch(e){showToast("没发出去 😢");}
+}
+
+async function delReply(id){
+  const n=notes[currentNoteIdx];
+  try{
+    await api(`/replies/${id}`,{method:"DELETE"});
+    n.replies=(n.replies||[]).filter(r=>r.id!==id);
+    renderThread();renderNote();
+  }catch(e){showToast("删不掉 😢");}
+}
+
 function showNoteWriter(){document.getElementById("noteModal").classList.add("show");}
 async function saveNote(){
   const text=document.getElementById("noteText").value.trim();
@@ -851,7 +979,7 @@ async function saveNote(){
   const from=document.getElementById("noteAuthor").value.trim()||"小克";
   try{
     const saved=await api("/notes",{method:"POST",body:{content:text,author:from}});
-    notes.unshift({id:saved.id,text,from,date:getToday(),created_at:new Date().toISOString()});
+    notes.unshift({id:saved.id,text,from,date:getToday(),created_at:new Date().toISOString(),replies:[]});
     document.getElementById("noteText").value="";
     document.getElementById("noteAuthor").value="";
     currentNoteIdx=0;
