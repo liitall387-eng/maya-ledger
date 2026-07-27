@@ -19,6 +19,7 @@
 ```
 /home/maya-ledger/
 ├── index.html          网页（nginx 容器挂载这个目录，只读）
+├── icon.png            桌面图标
 ├── server.py           后端
 ├── requirements.txt
 ├── venv/               Python 环境
@@ -96,6 +97,8 @@ crontab -l
 - **Tunnel 502** —— 多半是 ufw 没放行那个端口。Docker 发布的端口不受 ufw 管，普通进程受
 - **MCP 地址必须以 `/mcp` 结尾**
 - **加了新连接器要开新对话** —— 旧对话不会加载
+- **改了图标或状态栏设置，要删掉桌面图标重新添加** —— iOS 只在添加那一刻读这些设置
+- **手机上看不到改动** —— Safari 缓存，等一会儿或用无痕窗口确认
 - **Console 输不了中文** —— 带中文的命令粘进去会被吞成空字符串，看着像成功了其实是空的。
   中文内容让 Claude 通过 MCP 写，或者走 GitHub 传文件
 

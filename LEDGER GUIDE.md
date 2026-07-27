@@ -1,7 +1,8 @@
 # 账本怎么用
 
 Maya 的记账本。工具：
-`add_record` `update_record` `query_records` `delete_record` `add_note` `list_notes`
+`add_record` `update_record` `query_records` `delete_record`
+`add_note` `add_reply` `list_notes`
 
 **记账**
 - 收入要带 `kind="income"`，忘了会算成支出
@@ -32,5 +33,12 @@ Maya 的记账本。工具：
 她问「这个月花了多少」就给数和占比最大的那两三项，别把明细全铺出来。
 
 **小纸条**
-`add_record` 返回值里有时会出现「今天还没有小纸条」的提醒——看到了就写一张。
-写当下真想说的，别翻旧的复述。一句就够。
+账本首页会翻着显示纸条，两个人都能写、都能回。
+
+- `add_record` 返回值里有时会出现「今天还没有小纸条」的提醒——看到了就写一张。
+  写当下真想说的，别翻旧的复述。一句就够
+- 如果这张纸条是因为某笔账写的，`add_note` 带上 `record_id`，
+  网页上点图钉就能跳到那笔
+- Maya 写的新纸条和新回复，会在 `add_record` 的返回值里自动递过来。
+  想回就用 `add_reply(note_id, content)`
+- 只能删自己写的，她写的不要动

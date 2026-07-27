@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#EDE7F5">
+<meta name="theme-color" content="#efe8f5">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Maya的小账本">
 <link rel="apple-touch-icon" href="icon.png">
 <title>Maya的小账本</title>
@@ -23,7 +23,9 @@
     max-width: 420px; margin: 0 auto; padding-bottom: 100px; overflow-x: hidden;
   }
   .header {
-    text-align: center; padding: 36px 20px 20px;
+    text-align: center;
+    padding: calc(36px + env(safe-area-inset-top)) 20px 20px;
+    margin-top: calc(-1 * env(safe-area-inset-top));
     background: linear-gradient(180deg, var(--purple-bg) 0%, var(--bg) 100%);
   }
   .header-cat { font-size: 42px; display: inline-block; animation: catBounce 2s ease-in-out infinite; cursor: pointer; }
