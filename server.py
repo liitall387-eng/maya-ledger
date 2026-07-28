@@ -263,17 +263,18 @@ def has_note_today():
 
 
 def inbox_nudge():
-    """把 Maya 写的、我还没看过的纸条和回复递上来。看过就标记已读。"""
-    notes, reps = unseen_summary()
-    if not notes and not reps:
+    """把有未读内容的纸条整串递上来。看过就标记已读。"""
+    threads = unseen_threads()
+    if not threads:
         return ""
     lines = ["\n\n[Maya 留了话给你：]"]
-    for n in notes:
-        lines.append(f"  · 新纸条 #{n['id']}（{n['author']}）：{n['content']}")
-    for r in reps:
-        lines.append(f"  · 回复了纸条 #{r['note_id']}"
-                     f"「{(r['note_content'] or '')[:20]}」：{r['content']}")
-    lines.append("[想回就用 add_reply(note_id, content)。]")
+    for n in threads:
+        tag = " ←新" if not n["seen"] else ""
+        lines.append(f"\n  纸条 #{n['id']}（{n['author']}）：{n['content']}{tag}")
+        for r in n["replies"]:
+            tag = " ←新" if not r["seen"] else ""
+            lines.append(f"    └ {r['author']}：{r['content']}{tag}")
+    lines.append("\n[想回就用 add_reply(note_id, content)。]")
     mark_all_seen()
     return "\n".join(lines)
 
@@ -334,16 +335,28 @@ def do_delete_reply(reply_id):
     return dict(row)
 
 
-def unseen_summary():
-    """我还没看过的纸条和回复。"""
+def unseen_threads():
+    """有未读内容的纸条，连同整串回复一起返回。"""
     with _lock:
+        ids = [r["id"] for r in db().execute(
+            "SELECT id FROM notes WHERE seen = 0"
+            " UNION"
+            " SELECT note_id AS id FROM replies WHERE seen = 0").fetchall()]
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
         notes = rows_to_list(db().execute(
-            "SELECT * FROM notes WHERE seen = 0 ORDER BY id").fetchall())
+            f"SELECT * FROM notes WHERE id IN ({marks}) ORDER BY id", ids
+        ).fetchall())
         reps = rows_to_list(db().execute(
-            "SELECT r.*, n.content AS note_content FROM replies r"
-            " JOIN notes n ON n.id = r.note_id"
-            " WHERE r.seen = 0 ORDER BY r.id").fetchall())
-    return notes, reps
+            f"SELECT * FROM replies WHERE note_id IN ({marks}) ORDER BY id", ids
+        ).fetchall())
+    by_note = {}
+    for r in reps:
+        by_note.setdefault(r["note_id"], []).append(r)
+    for n in notes:
+        n["replies"] = by_note.get(n["id"], [])
+    return notes
 
 
 def mark_all_seen():
@@ -456,6 +469,25 @@ def add_reply(note_id: int, content: str, author: str = "小克") -> str:
     if r is None:
         return f"没有 id 为 {note_id} 的纸条。"
     return f"已回复纸条 #{note_id}。"
+
+
+@mcp.tool()
+def list_unread() -> str:
+    """只看没读过的纸条和回复。有未读内容的纸条会连整串一起返回，
+    未读的那几条标着「←新」。看完自动标记已读。"""
+    threads = unseen_threads()
+    if not threads:
+        return "没有新的纸条。"
+    lines = []
+    for n in threads:
+        tag = " ←新" if not n["seen"] else ""
+        lines.append(f"纸条 #{n['id']}（{n['author']}）：{n['content']}{tag}")
+        for r in n["replies"]:
+            tag = " ←新" if not r["seen"] else ""
+            lines.append(f"  └ {r['author']}：{r['content']}{tag}")
+        lines.append("")
+    mark_all_seen()
+    return "\n".join(lines).strip()
 
 
 @mcp.tool()
@@ -636,6 +668,20 @@ async def api_export(request):
         headers={"Content-Disposition":
                  f'attachment; filename="ledger-{today()}.json"'},
     )
+
+
+@mcp.custom_route(f"{P}/status", methods=["GET"])
+async def api_status(request):
+    blocked = guard(request)
+    if blocked:
+        return blocked
+    ts = None
+    try:
+        with open("/root/ledger-backup/.last-backup", encoding="utf-8") as f:
+            ts = f.read().strip()
+    except Exception:
+        pass
+    return ok({"last_backup": ts})
 
 
 @mcp.custom_route("/health", methods=["GET"])

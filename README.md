@@ -79,6 +79,9 @@ journalctl -u maya-ledger -n 50 --no-pager
 /root/backup-ledger.sh
 ```
 
+脚本每次跑完会把时间写进 `/root/ledger-backup/.last-backup`，
+网页底部显示的「上次备份」就是读这个。
+
 看定时任务还在不在：
 
 ```bash

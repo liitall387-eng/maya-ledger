@@ -105,11 +105,12 @@
   }
   @keyframes slideIn { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
   .record-item.deleting { opacity:0; transform:translateX(-100px); transition:all 0.3s; }
-  .record-left { display:flex; align-items:center; gap:12px; flex:1; }
-  .record-icon { font-size:18px; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:10px; }
+  .record-left { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
+  .record-left > div { min-width:0; flex:1; }
+  .record-icon { flex:0 0 38px; font-size:18px; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:10px; }
   .record-note { font-size:14px; color:#333; font-weight:500; }
   .record-date { font-size:12px; color:#bbb; margin-top:3px; }
-  .record-right { display:flex; align-items:center; gap:8px; }
+  .record-right { display:flex; align-items:center; gap:8px; flex-shrink:0; margin-left:10px; }
   .record-amt { font-size:16px; font-weight:700; color:var(--danger); }
   .del-btn { border:none; background:none; color:#ddd; font-size:18px; cursor:pointer; padding:4px 8px; border-radius:8px; }
   .del-btn:active { color:var(--danger); }
@@ -216,7 +217,7 @@
   .note-nav-btn { background:none; border:none; color:var(--purple); font-size:14px; cursor:pointer; padding:4px 8px; }
   .note-counter { font-size:11px; color:#ccc; }
   .record-note { display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical;
-                 overflow:hidden; }
+                 overflow:hidden; text-overflow:ellipsis; word-break:break-all; }
   .record-note.expanded { -webkit-line-clamp:unset; overflow:visible; }
 </style>
 </head>
@@ -288,6 +289,7 @@
       <button class="tool-btn" onclick="showQuickAmtManager()">💰 快捷</button>
       <button class="tool-btn" onclick="showNoteWriter()">✉️ 纸条</button>
     </div>
+    <p id="backupInfo" style="text-align:center;font-size:11px;color:#c9bfb5;margin-top:14px;"></p>
   </div>
 </div>
 
@@ -360,6 +362,17 @@
       <button class="confirm-btn" style="flex:0;padding:14px 18px;" onclick="addQuickAmt()">+</button>
     </div>
     <div class="modal-btns"><button class="cancel-btn" style="flex:1;" onclick="hideModal('quickAmtModal')">完成</button></div>
+  </div>
+</div>
+
+<div id="catDetailModal" class="modal-overlay">
+  <div class="modal-box">
+    <h3 class="modal-title" id="catDetailTitle"></h3>
+    <p class="modal-desc" id="catDetailSum"></p>
+    <div id="catDetailBody" style="max-height:50vh;overflow-y:auto;margin:10px 0 4px;"></div>
+    <div class="modal-btns">
+      <button class="cancel-btn" onclick="hideModal('catDetailModal')">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -526,6 +539,11 @@ function inc(list){return list.filter(r=>r.kind==="income");}
 function sum(list){return list.reduce((s,r)=>s+r.amount,0);}
 function fmtD(d){const dt=new Date(d);return`${dt.getMonth()+1}/${dt.getDate()}`;}
 function getDIM(mk){const[y,m]=mk.split("-").map(Number);return new Date(y,m,0).getDate();}
+function nowLocal(){
+  const d=new Date(),p=n=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T`
+       + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 function getToday(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 function getCI(key){return categories.find(c=>c.key===key)||{key,emoji:"📌",color:"#999"};}
 function showToast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2200);}
@@ -570,7 +588,7 @@ function render(){
   let catHtml="";
   categories.forEach(c=>{
     const amt=catTotals[c.key]||0;
-    catHtml+=`<div class="cat-card"><div class="cat-head"><span class="cat-emoji">${c.emoji}</span><span class="cat-name">${c.key}</span></div><span class="cat-amt">¥${amt.toFixed(0)}</span><div class="cat-bar-bg"><div class="cat-bar" style="width:${amt/maxCat*100}%;background:${c.color};"></div></div></div>`;
+    catHtml+=`<div class="cat-card" onclick="openCatDetail('${c.key}')" style="cursor:pointer;"><div class="cat-head"><span class="cat-emoji">${c.emoji}</span><span class="cat-name">${c.key}</span></div><span class="cat-amt">¥${amt.toFixed(0)}</span><div class="cat-bar-bg"><div class="cat-bar" style="width:${amt/maxCat*100}%;background:${c.color};"></div></div></div>`;
   });
   document.getElementById("catGrid").innerHTML=catHtml;
 
@@ -922,6 +940,39 @@ function addQuickAmt(){
 function removeQuickAmt(i){quickAmts.splice(i,1);saveQuickAmts();renderQuickAmtList();showToast("删掉了～");}
 
 /* ============ 纸条 ============ */
+function openCatDetail(cat){
+  const list=exp(getMR(currentMonth)).filter(r=>r.category===cat)
+    .sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const ci=getCI(cat);
+  const total=sum(list);
+  document.getElementById("catDetailTitle").textContent=`${ci.emoji} ${cat}`;
+  document.getElementById("catDetailSum").textContent=
+    list.length?`${fmtML(currentMonth)}　${list.length} 笔　共 ¥${total.toFixed(2)}`
+               :`${fmtML(currentMonth)}　还没有记录`;
+  let h="";
+  list.forEach(r=>{
+    h+=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 2px;border-bottom:1px solid #f0ede8;">`
+      +`<div style="min-width:0;flex:1;cursor:pointer;" onclick="hideModal('catDetailModal');showEdit(${r.id})">`
+      +`<div style="font-size:14px;color:#5c5249;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.note||cat)}</div>`
+      +`<div style="font-size:12px;color:#bbb;margin-top:2px;">${fmtD(r.date)}</div>`
+      +`</div>`
+      +`<span style="font-size:15px;font-weight:600;color:#e07575;flex-shrink:0;">-¥${r.amount.toFixed(0)}</span>`
+      +`<button onclick="delFromCat(${r.id},'${cat}')" style="border:none;background:none;color:#ddd;font-size:17px;cursor:pointer;flex-shrink:0;padding:0 2px;">×</button>`
+      +`</div>`;
+  });
+  document.getElementById("catDetailBody").innerHTML=h;
+  document.getElementById("catDetailModal").classList.add("show");
+}
+
+async function delFromCat(id,cat){
+  try{
+    await api(`/records/${id}`,{method:"DELETE"});
+    records=records.filter(r=>r.id!==id);
+    openCatDetail(cat);
+    render();
+  }catch(e){showToast("删不掉，再试试 😢");}
+}
+
 function openThread(){
   const n=notes[currentNoteIdx];
   if(!n)return;
@@ -959,7 +1010,7 @@ async function sendReply(){
   try{
     const saved=await api(`/notes/${n.id}/replies`,{method:"POST",body:{content:v,author:"Maya"}});
     n.replies=n.replies||[];
-    n.replies.push({id:saved.id,content:v,author:"Maya",created_at:new Date().toISOString()});
+    n.replies.push({id:saved.id,content:v,author:"Maya",created_at:nowLocal()});
     document.getElementById("replyText").value="";
     renderThread();renderNote();
   }catch(e){showToast("没发出去 😢");}
@@ -981,7 +1032,7 @@ async function saveNote(){
   const from=document.getElementById("noteAuthor").value.trim()||"小克";
   try{
     const saved=await api("/notes",{method:"POST",body:{content:text,author:from}});
-    notes.unshift({id:saved.id,text,from,date:getToday(),created_at:new Date().toISOString(),replies:[]});
+    notes.unshift({id:saved.id,text,from,date:getToday(),created_at:nowLocal(),replies:[]});
     document.getElementById("noteText").value="";
     document.getElementById("noteAuthor").value="";
     currentNoteIdx=0;
@@ -997,10 +1048,26 @@ function catPat(){
 }
 
 /* ============ 启动 ============ */
+async function loadBackupInfo(){
+  try{
+    const st=await api("/status");
+    const el=document.getElementById("backupInfo");
+    if(!el)return;
+    if(st.last_backup){
+      const d=new Date(st.last_backup.replace(" ","T"));
+      const p=n=>String(n).padStart(2,"0");
+      el.textContent=`上次备份：${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }else{
+      el.textContent="还没有备份记录";
+    }
+  }catch(e){}
+}
+
 async function boot(){
   try{
     await loadAll();
     render();
+    loadBackupInfo();
   }catch(e){
     if(API_KEY)showToast("连不上服务器 😢");
   }
